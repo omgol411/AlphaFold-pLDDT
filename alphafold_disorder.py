@@ -1,4 +1,16 @@
-#!/usr/bin/env python3
+### taken and modified from (https://github.com/BioComputingUP/AlphaFold-disorder)
+#Piovesan D, Monzon AM, Tosatto SCE.
+#Intrinsic protein disorder and conditional folding in AlphaFoldDB. Protein Sci. 2022 Nov;31(11):e4466.
+#PMID: 36210722 PMCID: PMC9601767.
+
+### Description: get pLDDT score from list of pdb files
+### input: a folder containing pdb files; the folder should be in the same directory as the py file or mention full path to the folder in the input
+### output: tsv file with pLDDT score for all the pdb files
+
+### to run this type following command in the cmd
+### 	'python3 alphafold_get_pLDDT.py -i pdbs/ -o out.tsv'
+### note: 'pdbs/' is path to "pdbs" folder containing pdb files
+
 
 from Bio.PDB import PDBParser
 from Bio.PDB.MMCIFParser import FastMMCIFParser
@@ -17,18 +29,12 @@ import gzip
 import shutil
 import os
 
-
-def moving_average(x, w):
-    # https://stackoverflow.com/questions/13728392/moving-average-or-running-mean
-    return np.convolve(x, np.ones(w), 'valid') / w
-
-
 def is_gz_file(filepath):
     with open(filepath, 'rb') as test_f:
         return test_f.read(2) == b'\x1f\x8b'
 
 
-def process_pdb(pdb_file, pdb_name, dssp_path='mkdssp'):
+def process_pdb(pdb_file, pdb_name):
     # Decompress the structure if necessary
     real_file = pdb_file
     if is_gz_file(pdb_file):
@@ -47,9 +53,6 @@ def process_pdb(pdb_file, pdb_name, dssp_path='mkdssp'):
         # assume mmCIF
         structure = FastMMCIFParser(QUIET=True).get_structure('', real_file)
 
-    # Calculate DSSP
-    dssp = DSSP(structure[0], real_file, dssp=dssp_path)  # WARNING Check the path of mkdssp
-    dssp_dict = dict(dssp)
 
     # Remove decompressed if necessary
     if real_file != pdb_file:
@@ -59,30 +62,10 @@ def process_pdb(pdb_file, pdb_name, dssp_path='mkdssp'):
     df = []
     for i, residue in enumerate(structure.get_residues()):
         lddt = residue['CA'].get_bfactor() / 100.0
-        rsa = float(dssp_dict.get((residue.get_full_id()[2], residue.id))[3])
-        ss = dssp_dict.get((residue.get_full_id()[2], residue.id))[2]
-        df.append((pdb_name, i + 1, seq1(residue.get_resname()), lddt, 1 - lddt, rsa, ss))
-    df = pd.DataFrame(df, columns=['name', 'pos', 'aa', 'lddt', 'disorder', 'rsa', 'ss'])
+        
+        df.append((pdb_name, i + 1, seq1(residue.get_resname()), lddt, 1 - lddt))
+    df = pd.DataFrame(df, columns=['name', 'pos', 'aa', 'lddt', 'disorder'])
     return df
-
-
-def make_prediction(df, window_rsa=[25], thresholds_rsa=[0.581]):
-    for w in window_rsa:
-        # Smooth disorder score (moving average)
-        column_rsa_window = 'disorder-{}'.format(w)
-        half_w = int((w - 1) / 2)
-        df[column_rsa_window] = moving_average(np.pad(df['rsa'], (half_w, half_w), 'reflect'), half_w * 2 + 1)
-
-        # Transofrm scores above RSA threshold
-        for th_rsa in thresholds_rsa:
-            column_rsa_binding = 'binding-{}-{}'.format(w, th_rsa)
-            df[column_rsa_binding] = df[column_rsa_window].copy()
-            df.loc[df[column_rsa_window] > th_rsa, column_rsa_binding] = df.loc[
-                                                                             df[column_rsa_window] > th_rsa, 'lddt'] * (
-                                                                                 1 - th_rsa) + th_rsa
-
-    return df
-
 
 def parse_args():
     parent_parser = argparse.ArgumentParser(add_help=False)
@@ -90,20 +73,13 @@ def parse_args():
     group = parent_parser.add_mutually_exclusive_group(required=True)
     group.add_argument('-i', '--in_struct', type=str,
                        help='A single file, folder or file listing containing (gzipped) PDB or mmCIF files (relative paths)')
-    group.add_argument('-d', '--in_dssp', type=str, help='A TSV file with RSA and pLDDT columns (checkpoint file)')
+    #group.add_argument('-d', '--in_dssp', type=str, help='A TSV file with RSA and pLDDT columns (checkpoint file)')
 
     parent_parser.add_argument('-o', '--out', type=str, required=True,
                                help='Output file. Automatically generate multiple files using this name, ignore extention')
 
-    parent_parser.add_argument('-f', '--format', type=str, choices=['tsv', 'caid'], default='tsv', help='Output format')
-
-    parent_parser.add_argument('-w', '--rsa_window', nargs='*', type=int, default=[25],
-                               help='Apply a moving average over window on the RSA')
-    parent_parser.add_argument('-t', '--rsa_threshold', nargs='*', type=float, default=[0.581],
-                               help='In binding prediction, filter positions with RSA values under threshold')
-
-    parent_parser.add_argument('-dssp', type=str, default='mkdssp', help='Path to mkdssp (3.x)')
-
+    parent_parser.add_argument('-f', '--format', type=str, choices=['tsv'], default='tsv', help='Output format')
+    
     parent_parser.add_argument('-ll', type=str, choices=['notset', 'debug', 'info', 'warning', 'error', 'critical'],
                                default='info', help='Log level')
 
@@ -116,7 +92,7 @@ def process_file(f):
     result = pd.DataFrame([])
     if f.stat().st_size > 0:  # and 'P52799' in file.stem:  # 'P13693', 'P52799', 'P0AE72', 'Q13148'
         logging.debug('Processing PDB {}'.format(f))
-        result = process_pdb(f, f.stem.split('.')[0], dssp_path=args.dssp)
+        result = process_pdb(f, f.stem.split('.')[0])
     else:
         logging.debug('Empty file {}'.format(f))
     return result
@@ -160,36 +136,16 @@ if __name__ == '__main__':
             for file in p.iterdir():
                 processed_data = process_file(file)
                 if not processed_data.empty:
-                    data = data.append(processed_data)
-
-        # Write a TSV file
-        fout_name = '{}/{}_data.tsv'.format(fout_path.parent, fout_path.stem)
-        data.to_csv(fout_name, sep='\t', quoting=csv.QUOTE_NONE, index=False, float_format='%.3f')
-        logging.info('DSSP data written in {}'.format(fout_name))
-    elif args.in_dssp:
-        # Start from checkpoint file
-        data = pd.read_csv(args.in_dssp, sep='\t')
-        logging.info('DSSP data read from {}'.format(args.in_dssp))
+                    data = data.append(processed_data)    
     else:
         data = None
 
-    # Calculate predictions
     pred = pd.DataFrame()
     for name, pdb_data in data.groupby('name'):
-        pred = pred.append(make_prediction(pdb_data.copy(),
-                                           window_rsa=args.rsa_window,
-                                           thresholds_rsa=args.rsa_threshold))
-    logging.info('Prediction calculated')
-
+        pred = pred.append(pdb_data.copy())
+	
     # Write to file
     if args.format == 'tsv':
         fout_name = '{}/{}_pred.tsv'.format(fout_path.parent, fout_path.stem)
         pred.to_csv(fout_name, sep='\t', quoting=csv.QUOTE_NONE, index=False, float_format='%.3f')
         logging.info('Prediction written in {}'.format(fout_path))
-    elif args.format == 'caid':
-        methods = set(pred.head()) - {'name', 'pos', 'aa', 'lddt', 'rsa', 'ss'}
-        for method in methods:
-            with open('{}/{}_{}.dat'.format(fout_path.parent, fout_path.stem, method), 'w') as fout:
-                for name, pdb_pred in pred.groupby('name'):
-                    fout.write('>' + name + '\n' + (pdb_pred['pos'].astype(str) + '\t' + pdb_pred['aa'] + '\t' + pdb_pred[method].round(3).astype(str) + '\t').str.cat(sep='\n') + '\n')
-        logging.info('CAID prediction files written in {}/'.format(fout_path.parent))
