@@ -4,7 +4,7 @@
 
 The script takes in input a folder with PDB files and writes a TSV file.
 
-    python3 alphafold_disorder.py -i pdbs/ -o out.tsv
+    python3 alphafold_get_plddt.py -i pdbs/ -o out.tsv
 
 #### Citation
 
